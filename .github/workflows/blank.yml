@@ -1,0 +1,69 @@
+name: Update Test Queue
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  update-test-json:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate job id
+        run: echo "JOB_ID=$(date +%s)" >> $GITHUB_ENV
+
+      - name: Switch to test-run branch
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          # Fetch all branches
+          git fetch origin
+
+          # Switch to test-run branch (create if doesn't exist)
+          git checkout test-run || git checkout -b test-run
+
+          # Track remote branch if it exists
+          git branch --set-upstream-to=origin/test-run || true
+
+      - name: Update test.json
+        run: |
+          FILE="test-run/test.json"
+
+          mkdir -p test-run
+
+          # create default file if missing
+          if [ ! -f "$FILE" ]; then
+            echo '{"status":"Test Completed","job_id":null}' > $FILE
+          fi
+
+          STATUS=$(cat $FILE | jq -r '.status')
+
+          echo "Current status: $STATUS"
+
+          if [ "$STATUS" = "Test Completed" ]; then
+            jq --arg id "$JOB_ID" '.status="Pending Test \($id)" | .job_id=$id' $FILE > tmp.json && mv tmp.json $FILE
+
+          elif [[ "$STATUS" == Pending* ]]; then
+            jq --arg id "$JOB_ID" '.status="On going test \($id)" | .job_id=$id' $FILE > tmp.json && mv tmp.json $FILE
+
+          elif [[ "$STATUS" == "On going test"* ]]; then
+            jq --arg id "$JOB_ID" '.status="Test Completed \($id)" | .job_id=$id' $FILE > tmp.json && mv tmp.json $FILE
+          fi
+
+      - name: Commit and push to test-run branch
+        run: |
+          git add test-run/test.json
+
+          git commit -m "Update test queue state" || exit 0
+
+          git push origin test-run
